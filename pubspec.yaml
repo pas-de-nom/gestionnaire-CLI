@@ -1,0 +1,9 @@
+name: tache_cli
+description: Gestionnaire de tâches en ligne de commande (Dart pur)
+publish_to: 'none'
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dev_dependencies:
+  test: ^1.24.0
