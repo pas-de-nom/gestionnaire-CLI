@@ -26,8 +26,13 @@ class InvalidPriorityException extends TaskException {
       : super('Priorité invalide: "$value" (attendu: low, medium ou high).');
 }
 
+class InvalidDateException extends TaskException {
+  InvalidDateException(String value)
+      : super('Date invalide: "$value" (format attendu: jj/mm/aaaa).');
+}
+
 // ============================================================
-// MODÈLES
+// MODÈLES : enum, interface, classe abstraite, héritage
 // ============================================================
 
 enum Priority { low, medium, high }
@@ -42,6 +47,16 @@ Priority priorityFromString(String value) {
       return Priority.high;
     default:
       throw InvalidPriorityException(value);
+  }
+}
+
+DateTime parseDate(String value) {
+  try {
+    final parts = value.split('/');
+    if (parts.length != 3) throw const FormatException();
+    return DateTime(int.parse(parts[2]), int.parse(parts[1]), int.parse(parts[0]));
+  } catch (_) {
+    throw InvalidDateException(value);
   }
 }
 
@@ -238,7 +253,9 @@ class TaskRepository implements Repository<Task> {
 }
 
 // ============================================================
-// MENU CLI
+// POINT D'ENTRÉE
+//   - Sans argument : menu interactif
+//   - Avec arguments : add / list / complete / delete
 // ============================================================
 
 late final TaskRepository repo;
@@ -249,9 +266,142 @@ String genererId() {
   return '${DateTime.now().millisecondsSinceEpoch}_$_compteur';
 }
 
-void main() {
+void main(List<String> args) {
   repo = TaskRepository('taches.json');
 
+  if (args.isEmpty) {
+    lancerMenuInteractif();
+    return;
+  }
+
+  try {
+    executerCommande(args);
+  } on TaskException catch (e) {
+    stderr.writeln('Erreur : $e');
+    exit(1);
+  }
+}
+
+// ---------------- MODE COMMANDE ----------------
+
+String? getOption(List<String> args, String nom) {
+  final index = args.indexOf('--$nom');
+  if (index == -1 || index + 1 >= args.length) return null;
+  return args[index + 1];
+}
+
+bool hasFlag(List<String> args, String nom) => args.contains('--$nom');
+
+void executerCommande(List<String> args) {
+  final commande = args[0];
+
+  switch (commande) {
+    case 'add':
+      commandeAdd(args);
+      break;
+    case 'list':
+      commandeList(args);
+      break;
+    case 'complete':
+      commandeComplete(args);
+      break;
+    case 'delete':
+      commandeDelete(args);
+      break;
+    case 'help':
+    case '--help':
+    case '-h':
+      afficherAide();
+      break;
+    default:
+      print('Commande inconnue: "$commande". Tape "help" pour voir les commandes disponibles.');
+  }
+}
+
+void commandeAdd(List<String> args) {
+  if (args.length < 2) {
+    print('Usage: add "<titre>" [--priority low|medium|high] [--due jj/mm/aaaa] [--urgent]');
+    return;
+  }
+  final titre = args[1];
+  final urgent = hasFlag(args, 'urgent');
+  final dueStr = getOption(args, 'due');
+  final dueDate = dueStr != null ? parseDate(dueStr) : null;
+
+  final id = genererId();
+  Task tache;
+
+  if (urgent) {
+    tache = UrgentTask(id: id, title: titre, dueDate: dueDate);
+  } else {
+    final prioStr = getOption(args, 'priority') ?? 'medium';
+    final priorite = priorityFromString(prioStr);
+    tache = NormalTask(id: id, title: titre, priority: priorite, dueDate: dueDate);
+  }
+
+  repo.add(tache);
+  print('Tâche ajoutée (id: $id).');
+}
+
+void commandeList(List<String> args) {
+  final tri = getOption(args, 'sort');
+  final taches = tri == 'date' ? repo.sortedByDate() : repo.sortedByPriority();
+  afficherListe(taches);
+}
+
+void commandeComplete(List<String> args) {
+  if (args.length < 2) {
+    print('Usage: complete <id>');
+    return;
+  }
+  final tache = repo.getById(args[1]);
+  if (tache is Completable) {
+    (tache as Completable).markCompleted();
+  }
+  repo.update(tache);
+  print('Tâche marquée comme terminée.');
+}
+
+void commandeDelete(List<String> args) {
+  if (args.length < 2) {
+    print('Usage: delete <id>');
+    return;
+  }
+  repo.remove(args[1]);
+  print('Tâche supprimée.');
+}
+
+void afficherAide() {
+  print('''
+Gestionnaire de tâches - commandes disponibles :
+
+  add "<titre>" [--priority low|medium|high] [--due jj/mm/aaaa] [--urgent]
+  list [--sort priority|date]
+  complete <id>
+  delete <id>
+  (sans argument) -> menu interactif
+
+Exemples :
+  dart run lib/main.dart add "Réviser Dart" --priority high --due 24/12/2026
+  dart run lib/main.dart list --sort date
+  dart run lib/main.dart complete 1699999999_1
+  dart run lib/main.dart delete 1699999999_1
+''');
+}
+
+void afficherListe(List<Task> taches) {
+  if (taches.isEmpty) {
+    print('Aucune tâche pour le moment.');
+    return;
+  }
+  for (final t in taches) {
+    print('${t.id} | $t');
+  }
+}
+
+// ---------------- MODE INTERACTIF ----------------
+
+void lancerMenuInteractif() {
   bool continuer = true;
   while (continuer) {
     print('\n===== Gestionnaire de tâches =====');
@@ -267,19 +417,19 @@ void main() {
     try {
       switch (choix) {
         case '1':
-          ajouterTache();
+          ajouterTacheInteractif();
           break;
         case '2':
-          listerTaches(repo.sortedByPriority());
+          afficherListe(repo.sortedByPriority());
           break;
         case '3':
-          listerTaches(repo.sortedByDate());
+          afficherListe(repo.sortedByDate());
           break;
         case '4':
-          marquerTerminee();
+          marquerTermineeInteractif();
           break;
         case '5':
-          supprimerTache();
+          supprimerTacheInteractif();
           break;
         case '6':
           continuer = false;
@@ -295,7 +445,7 @@ void main() {
   print('Au revoir !');
 }
 
-void ajouterTache() {
+void ajouterTacheInteractif() {
   stdout.write('Titre : ');
   final titre = stdin.readLineSync() ?? '';
 
@@ -306,8 +456,7 @@ void ajouterTache() {
   final dateSaisie = stdin.readLineSync();
   DateTime? dateLimite;
   if (dateSaisie != null && dateSaisie.trim().isNotEmpty) {
-    final parts = dateSaisie.split('/');
-    dateLimite = DateTime(int.parse(parts[2]), int.parse(parts[1]), int.parse(parts[0]));
+    dateLimite = parseDate(dateSaisie.trim());
   }
 
   final id = genererId();
@@ -326,17 +475,7 @@ void ajouterTache() {
   print('Tâche ajoutée (id: $id).');
 }
 
-void listerTaches(List<Task> taches) {
-  if (taches.isEmpty) {
-    print('Aucune tâche pour le moment.');
-    return;
-  }
-  for (final t in taches) {
-    print('${t.id} | $t');
-  }
-}
-
-void marquerTerminee() {
+void marquerTermineeInteractif() {
   stdout.write('Id de la tâche à marquer comme terminée : ');
   final id = stdin.readLineSync() ?? '';
 
@@ -345,11 +484,10 @@ void marquerTerminee() {
     (tache as Completable).markCompleted();
   }
   repo.update(tache);
-    repo.update(tache);
-    print('Tâche marquée comme terminée.');
-  }
+  print('Tâche marquée comme terminée.');
+}
 
-void supprimerTache() {
+void supprimerTacheInteractif() {
   stdout.write('Id de la tâche à supprimer : ');
   final id = stdin.readLineSync() ?? '';
 
